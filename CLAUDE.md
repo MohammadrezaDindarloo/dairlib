@@ -109,6 +109,11 @@ Binaries appear under `bazel-bin/examples/sampling_c3/`.
 - `examples/sampling_c3/start_logging.py`, `process_lcm_logs.py`,
   `test/lcm_log_loader.cc`, `cost_visualization.py`: their logging and analysis tools.
 
+- **C3 / C3+ is an external Bazel module, not in this repo**: `MODULE.bazel:90-95` pins
+  `github.com/DAIRLab/c3` at commit `5c08cb2e`. Source (read-only, in the Bazel cache):
+  `bazel-dairlib/external/c3+/` — `core/` (`c3.cc`, `c3_plus.cc`, `lcs.cc`, `traj_eval.cc`),
+  `multibody/` (`lcs_factory`), `systems/`. Included as `#include "c3/core/..."`.
+
 ## 7. How to work
 
 - Read and understand before editing. Prefer adding new files over changing theirs.

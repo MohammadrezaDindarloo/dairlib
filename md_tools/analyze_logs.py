@@ -122,14 +122,63 @@ def analyze(run_dir, plots=False):
   loop_wall = np.diff(wall)
   loop_sim = np.diff(t)[np.diff(t) > 0]
 
+  # ---- time per goal spent in pose-tracking mode (after Σ xy error < 0.05·n).
+  pose = np.array([m.in_pose_tracking_mode for _, m in dbg], dtype=bool)
+  pose_frac_per_goal = []
+  for a, b in zip(bounds[:-1], bounds[1:]):
+    pose_frac_per_goal.append(float(dt[a:b][pose[a:b]].sum() / max(dt[a:b].sum(), 1e-9)))
+
   # ---- object distances to the edge of the EE sampling region.
   lim = load_limits(run_dir)
   act = log["C3_ACTUAL"]
   reach = {}
+  per_object = {}
+  stall = {}
   if act:
     names = list(act[0][1].state_names)
     n_obj = sum(1 for s in names if s.startswith("object_x_"))
     ta = np.array([m.utime for _, m in act]) * 1e-6
+    A = np.array([m.state for _, m in act])
+
+    # Per-object error to the final goal (C3_FINAL_TARGET, matched by time).
+    fin = log["C3_FINAL_TARGET"]
+    tf = np.array([m.utime for _, m in fin]) * 1e-6
+    F = np.array([m.state for _, m in fin])
+    jf = np.clip(np.searchsorted(tf, ta, side="right") - 1, 0, len(tf) - 1)
+    for i in range(n_obj):
+      p = [names.index(f"object_{c}_{i}") for c in ("x", "y")]
+      q = [names.index(f"object_q{c}_{i}") for c in ("w", "x", "y", "z")]
+      e_pos = np.linalg.norm(A[:, p] - F[jf][:, p], axis=1)
+      qa = A[:, q] / np.linalg.norm(A[:, q], axis=1, keepdims=True)
+      qf = F[jf][:, q] / np.linalg.norm(F[jf][:, q], axis=1, keepdims=True)
+      e_rot = 2 * np.arccos(np.clip(np.abs(np.sum(qa * qf, axis=1)), 0, 1))
+      per_object[f"object_{i}"] = {"final_pos_err_m": float(e_pos[-1]),
+                                   "final_rot_err_rad": float(e_rot[-1]),
+                                   "_series": (ta, e_pos, e_rot)}
+
+    # Stall: 30 s windows in which no object moved > 5 mm or rotated > 0.05 rad.
+    W = 30.0
+    stalled_windows = 0
+    edges = np.arange(ta[0], ta[-1] - W, W)
+    for w0 in edges:
+      sel = (ta >= w0) & (ta < w0 + W)
+      if sel.sum() < 2:
+        continue
+      moved = False
+      for i in range(n_obj):
+        p = [names.index(f"object_{c}_{i}") for c in ("x", "y")]
+        q = [names.index(f"object_q{c}_{i}") for c in ("w", "x", "y", "z")]
+        P, Q = A[sel][:, p], A[sel][:, q]
+        Q = Q / np.linalg.norm(Q, axis=1, keepdims=True)
+        dpos = np.linalg.norm(P - P[0], axis=1).max()
+        drot = (2 * np.arccos(np.clip(np.abs(Q @ Q[0]), 0, 1))).max()
+        if dpos > 0.005 or drot > 0.05:
+          moved = True
+          break
+      stalled_windows += 0 if moved else 1
+    stall = {"window_s": W, "windows": int(len(edges)), "stalled_windows": stalled_windows,
+             "frac_time_stalled": float(stalled_windows / max(len(edges), 1))}
+
     for i in range(n_obj):
       ix, iy = names.index(f"object_x_{i}"), names.index(f"object_y_{i}")
       d = np.array([dist_to_region_edge(m.state[ix], m.state[iy], lim, lim["margin"])
@@ -167,16 +216,20 @@ def analyze(run_dir, plots=False):
       "loop_period_sim_s": stats(loop_sim),
       "reach": {k: {kk: vv for kk, vv in v.items() if not kk.startswith("_")}
                 for k, v in reach.items()},
+      "per_object": {k: {kk: vv for kk, vv in v.items() if not kk.startswith("_")}
+                     for k, v in per_object.items()},
+      "stall": stall,
+      "pose_mode_frac_per_goal": pose_frac_per_goal,
       "final_pos_error_m": float(pos_err[-1]), "final_rot_error_rad": float(rot_err[-1]),
   }
   if plots:
-    make_plots(run_dir, t, c3, goals, pos_err, rot_err, loop_wall, reach, inc)
+    make_plots(run_dir, t, c3, goals, pos_err, rot_err, loop_wall, reach, inc, per_object)
   with open(op.join(run_dir, "metrics.json"), "w") as f:
     json.dump(res, f, indent=1)
   return res
 
 
-def make_plots(run_dir, t, c3, goals, pos_err, rot_err, loop_wall, reach, inc):
+def make_plots(run_dir, t, c3, goals, pos_err, rot_err, loop_wall, reach, inc, per_object):
   import matplotlib
   matplotlib.use("Agg")
   import matplotlib.pyplot as plt
@@ -186,8 +239,14 @@ def make_plots(run_dir, t, c3, goals, pos_err, rot_err, loop_wall, reach, inc):
                    color="0.85", step="post", linewidth=0, label="repositioning")
     for i in inc:
       a.axvline(t[i], color="g", lw=1)
-  ax[0].plot(t, pos_err, lw=1); ax[0].set_ylabel("Σ pos error [m]")
-  ax[1].plot(t, rot_err, lw=1); ax[1].set_ylabel("Σ rot error [rad]")
+  # Per-object errors to the final goal; dashed lines = success thresholds.
+  for k, v in per_object.items():
+    ta, ep, er = v["_series"]
+    ax[0].plot(ta, ep, lw=1, label=k)
+    ax[1].plot(ta, er, lw=1, label=k)
+  ax[0].axhline(0.02, color="k", ls="--", lw=0.8); ax[1].axhline(0.1, color="k", ls="--", lw=0.8)
+  ax[0].set_ylabel("pos error [m]"); ax[1].set_ylabel("rot error [rad]")
+  ax[0].legend(fontsize=7)
   for k, v in reach.items():
     ta, d = v["_series"]
     ax[2].plot(ta, d, lw=1, label=k)
@@ -226,8 +285,16 @@ def main():
     print(f"  loop period wall: median {lp['median']*1e3:.0f} ms  "
           f"p95 {res['loop_period_wall_p95_s']*1e3:.0f} ms  max {lp['max']*1e3:.0f} ms")
     for k, v in res["reach"].items():
+      po = res["per_object"].get(k, {})
       print(f"  {k}: min dist to edge {v['min_dist_to_edge_m']:.3f} m  "
-            f"outside {v['frac_time_outside']:.2%} ({v['outside_events']} events)")
+            f"outside {v['frac_time_outside']:.2%} ({v['outside_events']} events)  "
+            f"final err {po.get('final_pos_err_m', float('nan')):.3f} m / "
+            f"{po.get('final_rot_err_rad', float('nan')):.2f} rad")
+    st = res["stall"]
+    print(f"  stalled (no object moved >5 mm/0.05 rad in {st['window_s']:.0f} s): "
+          f"{st['stalled_windows']}/{st['windows']} windows")
+    print(f"  pose-mode fraction per goal: "
+          f"{[round(x, 2) for x in res['pose_mode_frac_per_goal']]}")
 
 
 if __name__ == "__main__":

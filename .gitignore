@@ -17,3 +17,6 @@ callgrind.out.*
 
 # md-reachability: local sim logs
 /sim_logs/
+/compile_commands.json
+/external
+/.cache/
