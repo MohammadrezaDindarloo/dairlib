@@ -14,3 +14,6 @@ attic/multibody/solver_log/
 /MODULE.bazel.lock
 callgrind.out.*
 /push-anything.sif
+
+# md-reachability: local sim logs
+/sim_logs/
