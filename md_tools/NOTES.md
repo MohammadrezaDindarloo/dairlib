@@ -452,5 +452,22 @@ Each stage ends with a check that can be read from logs, so understanding is bac
 
 ## Log
 
+- 2026-10-13: Stage 1 tooling. `run_experiment.sh` (headless run, own LCM port, params
+  snapshot/restore under a cluster-wide `flock`, restore as soon as the controller has loaded
+  its config), `analyze_logs.py`, `experiments.sbatch` (array, one config per task, analysis
+  inside the job). Pitfalls hit and fixed:
+  - `srun` from inside the interactive job tries to add a step to that 4-CPU job → use `sbatch`.
+  - `lcm-logger` rejects `-l`; use `--lcm-url=`.
+  - Logging straight to Lustre (~2.9 MB/s, ~790k msgs per 3 min) is too slow: the logger's
+    100 MB queue filled and it **silently dropped** everything after ~36 s. Now logs to node-local
+    `/tmp` and moves the file at the end; `analyze_logs.py` flags logs covering < 90% of the run.
+  - Log size ≈ 165 MB/min (≈ 4 GB per 25-min run).
+- 2026-10-13: Smoke test, 1 object `G_shape_video`, 3 min, crannog04, 24 CPUs
+  (`~/pa_runs/smoke_G_3min`): 5 goals, time to goal mean 33.3 s (median 32.6, 25.4–40.8);
+  paper hardware single-object mean ≈ 31 s. Loop period median 69 ms (p95 112 ms), real-time
+  factor 1.00, no clock resets (vs. the 4-CPU run: >1 s steps). Time in C3 63%. Switches: 34×
+  reason 4 (unproductive) and 34× reason 2 (reached repos target), 0× reasons 1/3.
+  Observation from `timeline.png`: per goal, the coarse move takes ~5 s; most of the time is a
+  flat fine-alignment phase with repeated C3 → unproductive → reposition cycles.
 - 2026-10-13: Part A written. No code changed. Findings §0.1–0.7 need decisions before Part B
   (restore tracked YAMLs after runs; no seeding; fix CPU count per run; own logger wrapper).
