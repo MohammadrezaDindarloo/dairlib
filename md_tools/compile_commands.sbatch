@@ -11,7 +11,7 @@
 #SBATCH -p Open-Research
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=64G
-#SBATCH --time=08:00:00
+#SBATCH --time=03:00:00
 #SBATCH -o /home/%u/pa_runs/compile_commands_%j.out
 
 set -u

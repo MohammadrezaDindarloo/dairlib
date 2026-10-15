@@ -3,11 +3,14 @@
 load("@hedron_compile_commands//:refresh_compile_commands.bzl", "refresh_compile_commands")
 
 # Writes compile_commands.json at the repo root for clangd / VS Code.
-# Whole repo, including headers and external sources (Drake, C3). Slow: run it
-# as a Slurm job with md_tools/compile_commands.sbatch, not on a small node.
-# --keep_going: some packages (e.g. ROS ones) may not analyse in this container;
-# their files are skipped instead of failing the whole extraction.
+# All of dairlib (//...) with headers. External sources (Drake, C3, abseil) are
+# excluded: their headers still resolve through the include paths, and the tool
+# crashes on Drake's abseil header-only "parse_headers" actions (job 3677691).
+# Run it as a Slurm job with md_tools/compile_commands.sbatch, not on a small node.
+# --keep_going: packages that do not analyse in this container (e.g. ROS ones)
+# are skipped instead of failing the whole extraction.
 refresh_compile_commands(
     name = "refresh_compile_commands",
     targets = {"//...": "--keep_going"},
+    exclude_external_sources = True,
 )
